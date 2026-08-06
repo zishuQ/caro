@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.0.4](https://github.com/zishuQ/caro/compare/deepagents-talon==0.0.3...deepagents-talon==0.0.4) (2026-08-06)
+
+
+### Features
+
+* **code:** add Claude Opus 5 support ([#5049](https://github.com/zishuQ/caro/issues/5049)) ([c0afec5](https://github.com/zishuQ/caro/commit/c0afec5ab7e9860d1572002c1f689f95dd15cf8e))
+* **talon:** add Fleet zip import command ([#4493](https://github.com/zishuQ/caro/issues/4493)) ([0289dd0](https://github.com/zishuQ/caro/commit/0289dd0a190e5060e631e840da115dd59c64cf5c))
+
 ## [0.0.3](https://github.com/langchain-ai/deepagents/compare/deepagents-talon==0.0.2...deepagents-talon==0.0.3) (2026-07-06)
 
 
