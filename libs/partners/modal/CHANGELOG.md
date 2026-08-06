@@ -2,6 +2,18 @@
 
 # Changelog
 
+## [0.0.7](https://github.com/zishuQ/caro/compare/langchain-modal==0.0.6...langchain-modal==0.0.7) (2026-08-06)
+
+
+### Features
+
+* **code:** add Claude Opus 5 support ([#5049](https://github.com/zishuQ/caro/issues/5049)) ([c0afec5](https://github.com/zishuQ/caro/commit/c0afec5ab7e9860d1572002c1f689f95dd15cf8e))
+
+
+### Bug Fixes
+
+* **modal:** require deepagents 0.7.x ([#5148](https://github.com/zishuQ/caro/issues/5148)) ([ad6d1a3](https://github.com/zishuQ/caro/commit/ad6d1a3547b5c0f9efc40ee5591c1a54b99652f4))
+
 ## [0.0.6](https://github.com/langchain-ai/deepagents/compare/langchain-modal==0.0.5...langchain-modal==0.0.6) (2026-07-29)
 
 ### Bug Fixes
