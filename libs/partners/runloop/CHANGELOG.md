@@ -2,6 +2,18 @@
 
 # Changelog
 
+## [0.0.8](https://github.com/zishuQ/caro/compare/langchain-runloop==0.0.7...langchain-runloop==0.0.8) (2026-08-06)
+
+
+### Features
+
+* **code:** add Claude Opus 5 support ([#5049](https://github.com/zishuQ/caro/issues/5049)) ([c0afec5](https://github.com/zishuQ/caro/commit/c0afec5ab7e9860d1572002c1f689f95dd15cf8e))
+
+
+### Bug Fixes
+
+* **runloop:** require deepagents 0.7.x ([#5149](https://github.com/zishuQ/caro/issues/5149)) ([ea09982](https://github.com/zishuQ/caro/commit/ea099822621cc92e4e10e6dc254f474f607213db))
+
 ## [0.0.7](https://github.com/langchain-ai/deepagents/compare/langchain-runloop==0.0.6...langchain-runloop==0.0.7) (2026-07-29)
 
 ### Bug Fixes
