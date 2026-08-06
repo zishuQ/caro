@@ -31993,6 +31993,27 @@ class TestWelcomeBannerLiveUpdates:
                 banner = app.query_one("#welcome-banner", WelcomeBanner)
                 assert "openai:gpt-5.5" in banner._build_banner().plain
 
+    async def test_sync_status_model_uses_session_override(self) -> None:
+        """Banner and status bar follow `/model`, not startup settings."""
+        from deepagents_code._env_vars import SPLASH_SHOW_MODEL
+        from deepagents_code.tui.widgets.status import ModelLabel
+        from deepagents_code.tui.widgets.welcome import WelcomeBanner
+
+        with patch.dict(os.environ, {SPLASH_SHOW_MODEL: "1"}):
+            app = DeepAgentsApp(agent=MagicMock(), thread_id="thread-123")
+            async with app.run_test() as pilot:
+                with patch("deepagents_code.config.settings") as mock_settings:
+                    mock_settings.model_provider = "openai"
+                    mock_settings.model_name = "gpt-5.6-luna"
+                    app._model_override = "deepseek:deepseek-v4-flash"
+                    app._sync_status_model()
+                await pilot.pause()
+                banner = app.query_one("#welcome-banner", WelcomeBanner)
+                label = app.query_one("#status-bar #model-display", ModelLabel)
+                assert "deepseek:deepseek-v4-flash" in banner._build_banner().plain
+                assert label.provider == "deepseek"
+                assert label.model == "deepseek-v4-flash"
+
     async def test_apply_cwd_updates_banner(self) -> None:
         """`_apply_cwd_to_ui` pushes the working directory into the welcome banner."""
         from deepagents_code._env_vars import SPLASH_SHOW_CWD

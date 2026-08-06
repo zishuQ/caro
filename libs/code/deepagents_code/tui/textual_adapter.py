@@ -1291,25 +1291,23 @@ async def execute_task_textual(
             context["approval_mode"] = selected_mode.value
             context["auto_approve"] = selected_mode is not ApprovalMode.MANUAL
             try:
-                live_key = _require_approval_mode_key(
-                    await awrite_approval_mode(
-                        agent,
-                        thread_id,
-                        mode=selected_mode,
-                    )
+                live_key = await awrite_approval_mode(
+                    agent,
+                    thread_id,
+                    mode=selected_mode,
                 )
+                if live_key is None and selected_mode is not ApprovalMode.MANUAL:
+                    _require_approval_mode_key(live_key)
             except Exception:
                 logger.warning(
                     "Failed to persist selected approval mode; forcing Manual",
                     exc_info=True,
                 )
                 try:
-                    live_key = _require_approval_mode_key(
-                        await awrite_approval_mode(
-                            agent,
-                            thread_id,
-                            mode=ApprovalMode.MANUAL,
-                        )
+                    live_key = await awrite_approval_mode(
+                        agent,
+                        thread_id,
+                        mode=ApprovalMode.MANUAL,
                     )
                 except Exception as exc:
                     context["approval_mode"] = ApprovalMode.MANUAL.value
@@ -1332,8 +1330,14 @@ async def execute_task_textual(
                 if adapter._on_approval_mode_fallback is not None:
                     adapter._on_approval_mode_fallback(ApprovalMode.MANUAL.value)
                 adapter._update_status("Approval mode fell back to Manual")
-            context["approval_mode_key"] = live_key
-            session_state.approval_mode_key = live_key
+            if live_key is None:
+                # A local graph without a Store can still run safely in Manual
+                # mode. Autonomous modes always take the fallback path above.
+                context.pop("approval_mode_key", None)
+                session_state.approval_mode_key = None
+            else:
+                context["approval_mode_key"] = live_key
+                session_state.approval_mode_key = live_key
 
             from deepagents_code.hooks.interrupt import is_hook_interrupt_payload
             from deepagents_code.hooks.models.domain import HookEvent

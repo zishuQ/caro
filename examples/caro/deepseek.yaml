@@ -1,0 +1,21 @@
+routing:
+  default: primary
+  models:
+    primary:
+      model: deepseek:deepseek-v4-flash
+      temperature: 0.0
+      max_retries: 3
+  fallbacks: []
+approvals:
+  enabled: true
+  minimum_risk: high
+workspace:
+  root: .
+  shell_enabled: true
+state:
+  directory: .caro
+memory:
+  enabled: true
+  sources: [.caro/memory/AGENTS.md]
+langfuse:
+  enabled: false

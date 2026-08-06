@@ -890,6 +890,24 @@ async def test_restore_effort_override_applies_persisted_model_choice() -> None:
     }
 
 
+async def test_product_config_path_persists_effort_without_global_config(
+    tmp_path: Path,
+) -> None:
+    """Embedded products can keep effort preferences outside global config."""
+    product_config = tmp_path / "caro" / "deepagents-code.toml"
+    app = DeepAgentsApp(model_config_path=product_config)
+    app._mount_message = AsyncMock()  # ty: ignore
+    settings.model_provider = "openai"
+    settings.model_name = "gpt-5.6-luna"
+
+    await app._set_effort_override("high")
+
+    assert model_config.load_effort_for_model(
+        "openai:gpt-5.6-luna", product_config
+    ) == "high"
+    assert app._model_params_override == {"reasoning_effort": "high"}
+
+
 async def test_restore_effort_override_keeps_explicit_params() -> None:
     model_config.save_effort_for_model("openai:gpt-5.5", "high")
     app = DeepAgentsApp()

@@ -230,6 +230,10 @@ class InlinePromptTextArea(CollapsingPasteTextArea):
             return
         await super()._dispatch_burst_payload(payload)
 
+    async def _dispatch_burst_submission(self) -> None:
+        """Submit text after a buffered Enter receives no paste continuation."""
+        self.post_message(self.Submitted(self, self.submitted_value))
+
     async def _reject_dropped_media(self, text: str) -> bool:
         """Toast and swallow a dropped payload containing an image or video.
 

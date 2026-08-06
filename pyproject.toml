@@ -1,0 +1,102 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "caro-agent"
+version = "0.5.0"
+description = "Caro governed terminal coding agent built on DeepAgents and LangGraph"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11,<4"
+dependencies = [
+  "deepagents==0.7.1",
+  "deepagents-code==0.1.50",
+  "httpx[socks]>=0.28,<1",
+  "langchain==1.3.14",
+  "langgraph==1.2.10",
+  "langgraph-checkpoint-sqlite==3.1.1",
+  "langfuse==4.14.2",
+  "pydantic-settings>=2.10,<3",
+  "python-dotenv>=1.2,<2",
+  "pyyaml>=6.0,<7",
+  "rich>=14,<16",
+  "typer>=0.16,<1",
+  "aiosqlite>=0.22,<1",
+]
+
+[project.optional-dependencies]
+openai = ["langchain-openai>=1.4.1,<2"]
+deepseek = ["langchain-deepseek>=1.1.0,<2"]
+anthropic = ["langchain-anthropic>=1.5.3,<2"]
+google = ["langchain-google-genai>=4.3.2,<5"]
+openrouter = ["langchain-openrouter>=0.2.7,<1"]
+ollama = ["langchain-ollama>=1.1.0,<2"]
+providers = [
+  "langchain-openai>=1.4.1,<2",
+  "langchain-deepseek>=1.1.0,<2",
+  "langchain-anthropic>=1.5.3,<2",
+  "langchain-google-genai>=4.3.2,<5",
+  "langchain-openrouter>=0.2.7,<1",
+  "langchain-ollama>=1.1.0,<2",
+]
+all = [
+  "langchain-openai>=1.4.1,<2",
+  "langchain-deepseek>=1.1.0,<2",
+  "langchain-anthropic>=1.5.3,<2",
+  "langchain-google-genai>=4.3.2,<5",
+  "langchain-openrouter>=0.2.7,<1",
+  "langchain-ollama>=1.1.0,<2",
+  "build>=1.5,<2",
+  "mypy>=1.17,<2",
+  "pytest>=9,<10",
+  "pytest-asyncio>=1.4,<2",
+  "pytest-cov>=7,<8",
+  "ruff>=0.16,<1",
+  "types-PyYAML>=6.0.12,<7",
+]
+dev = [
+  "build>=1.5,<2",
+  "mypy>=1.17,<2",
+  "pytest>=9,<10",
+  "pytest-asyncio>=1.4,<2",
+  "pytest-cov>=7,<8",
+  "ruff>=0.16,<1",
+  "types-PyYAML>=6.0.12,<7",
+]
+
+[project.scripts]
+caro = "caro.cli:main_entry"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-config --strict-markers"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = ["integration: tests that exercise multiple Caro modules"]
+
+[tool.uv.sources]
+deepagents = { path = "libs/deepagents", editable = true }
+deepagents-code = { path = "libs/code", editable = true }
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+include = ["src/**/*.py", "tests/**/*.py"]
+extend-exclude = [".github", "DEEPAGENTS_README.md", "examples", "libs", "openwiki"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+packages = ["caro"]
+ignore_missing_imports = true
+disallow_subclassing_any = false

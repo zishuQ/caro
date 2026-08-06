@@ -1,0 +1,86 @@
+routing:
+  default: openai_primary
+  models:
+    openai_primary:
+      model: openai:gpt-5.6-sol
+      temperature: 0.0
+      max_retries: 2
+    deepseek_docs:
+      model: deepseek:deepseek-v4-flash
+      temperature: 0.0
+      max_retries: 2
+    anthropic_backup:
+      model: anthropic:claude-sonnet-4-6
+      max_retries: 2
+  rules:
+    - name: docs-on-deepseek
+      model: deepseek_docs
+      match:
+        any_keywords: [README, docs, documentation, 文档]
+        max_prompt_chars: 12000
+  fallbacks: [anthropic_backup]
+
+approvals:
+  enabled: true
+  minimum_risk: high
+
+# Optional project-local proxy. Explicit HTTP_PROXY/HTTPS_PROXY values in the
+# environment (including those loaded from .env) take precedence.
+# network:
+#   http_proxy: http://127.0.0.1:7897
+#   https_proxy: http://127.0.0.1:7897
+
+workspace:
+  root: .
+  shell_enabled: true
+  # Use "bubblewrap" on Linux when the workspace may contain untrusted input.
+  sandbox_backend: local
+  shell_timeout_seconds: 120
+  inherit_environment: false
+  allowed_environment: [PATH, LANG, LC_ALL, TERM]
+
+state:
+  directory: .caro
+  runs_database: runs.sqlite3
+  checkpoints_database: checkpoints.sqlite3
+
+memory:
+  enabled: true
+  sources: [.caro/memory/AGENTS.md]
+  initialize_missing: true
+  max_file_bytes: 131072
+  structured_enabled: true
+  structured_database: memory.sqlite3
+  auto_retrieve: true
+  retrieval_limit: 8
+  max_injected_chars: 12000
+  minimum_importance: 0.2
+  minimum_confidence: 0.6
+  max_item_chars: 4000
+  episodic_ttl_days: 90
+
+orchestration:
+  enabled: false
+
+langfuse:
+  enabled: false
+  environment: local
+  tags: [caro, coding]
+
+graph:
+  recursion_limit: 9999
+  stream_modes: [messages, updates]
+  history_limit: 50
+
+code:
+  enabled: true
+  skills_enabled: true
+  mcp_enabled: true
+  # mcp_config: .deepagents/mcp.json
+  trust_project_mcp: false
+  ask_user_enabled: true
+  interpreter_enabled: false
+
+system_prompt: |-
+  You are Caro, a governed terminal coding agent.
+  Work only inside the configured workspace, make focused changes, and verify them.

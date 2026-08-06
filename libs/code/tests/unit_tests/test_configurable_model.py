@@ -281,6 +281,30 @@ class TestModelSwap:
         assert captured[0].model is override
         assert request.model is original  # original unchanged
 
+    def test_embedding_model_resolver_avoids_rebuilding_model(self) -> None:
+        original = _make_model("claude-sonnet-4-6")
+        override = _make_model("gpt-5.5")
+        request = _make_request(original, context=CLIContext(model="openai:gpt-5.5"))
+        resolver = MagicMock(return_value=override)
+        middleware = ConfigurableModelMiddleware(
+            openai_prompt_cache_key=True,
+            model_resolver=resolver,
+        )
+        captured: list[ModelRequest] = []
+
+        with patch(_PATCH_CREATE) as create:
+            result = middleware.wrap_model_call(
+                request, lambda r: (captured.append(r), _make_response())[1]
+            )
+
+        resolver.assert_called_once_with("openai:gpt-5.5")
+        create.assert_not_called()
+        assert captured[0].model is override
+        assert _checkpoint_update(result) == {
+            "_model_spec": "openai:gpt-5.5",
+            "_model_params": None,
+        }
+
     def test_profile_overrides_forwarded_to_swapped_model(self) -> None:
         original = _make_model("claude-sonnet-4-6")
         override = _make_model("gpt-5.5")
@@ -332,6 +356,30 @@ class TestModelSwap:
 
         assert captured[0].model is override
         assert offloaded == [(create, ("openai:gpt-5.5",), {})]
+
+    async def test_async_embedding_resolver_updates_model_identity(self) -> None:
+        """The async TUI path patches identity when Caro resolves the model."""
+        request = _make_request(
+            _make_model("gpt-5.6-luna"),
+            context=CLIContext(model="deepseek:deepseek-v4-flash"),
+            system_prompt=TestModelIdentityPatch._OLD_PROMPT,
+        )
+        resolver = MagicMock(return_value=_make_model("deepseek-v4-flash"))
+        middleware = ConfigurableModelMiddleware(
+            openai_prompt_cache_key=True,
+            model_resolver=resolver,
+        )
+        captured: list[ModelRequest] = []
+
+        async def handler(r: ModelRequest) -> ModelResponse[Any]:  # noqa: RUF029
+            captured.append(r)
+            return _make_response()
+
+        await middleware.awrap_model_call(request, handler)
+
+        resolver.assert_called_once_with("deepseek:deepseek-v4-flash")
+        assert "`deepseek-v4-flash`" in (captured[0].system_prompt or "")
+        assert "`claude-opus-4-6`" not in (captured[0].system_prompt or "")
 
     async def test_async_profile_overrides_forwarded_to_swapped_model(self) -> None:
         original = _make_model("claude-sonnet-4-6")
@@ -1409,6 +1457,32 @@ class TestModelIdentityPatch:
         assert "Some preamble." in prompt
         assert "### Skills Directory" in prompt
         assert "`/tmp/skills`" in prompt
+
+    def test_identity_replaced_when_embedding_resolver_supplies_model(self) -> None:
+        """An embedding resolver must update identity without `ModelResult`."""
+        override = _make_model("deepseek-v4-flash")
+        request = _make_request(
+            _make_model("gpt-5.6-luna"),
+            context=CLIContext(model="deepseek:deepseek-v4-flash"),
+            system_prompt=self._OLD_PROMPT,
+        )
+        resolver = MagicMock(return_value=override)
+        middleware = ConfigurableModelMiddleware(
+            openai_prompt_cache_key=True,
+            model_resolver=resolver,
+        )
+        captured: list[ModelRequest] = []
+
+        middleware.wrap_model_call(
+            request, lambda r: (captured.append(r), _make_response())[1]
+        )
+
+        resolver.assert_called_once_with("deepseek:deepseek-v4-flash")
+        prompt = captured[0].system_prompt
+        assert prompt is not None
+        assert "`deepseek-v4-flash`" in prompt
+        assert "(provider: deepseek)" in prompt
+        assert "`claude-opus-4-6`" not in prompt
 
     def test_no_identity_section_left_unchanged(self) -> None:
         """Prompt without identity section is not modified."""

@@ -1,0 +1,20 @@
+routing:
+  default: primary
+  models:
+    primary:
+      model: openai:gpt-5.6-sol
+      temperature: 0.0
+  fallbacks: []
+approvals:
+  enabled: true
+  minimum_risk: high
+workspace:
+  root: .
+  shell_enabled: true
+state:
+  directory: .caro
+memory:
+  enabled: true
+  sources: [.caro/memory/AGENTS.md]
+langfuse:
+  enabled: false

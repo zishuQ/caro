@@ -19,7 +19,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Input, Static
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable, Mapping, Sequence
 
     from textual.app import ComposeResult
 
@@ -396,6 +396,7 @@ class ModelSelectorScreen(ModalScreen[tuple[str, str] | None]):
         title: str | None = None,
         description: str | Content | None = None,
         result_callback: Callable[[tuple[str, str] | None], None] | None = None,
+        configured_models: Sequence[tuple[str, str]] | None = None,
     ) -> None:
         """Initialize the ModelSelectorScreen.
 
@@ -414,6 +415,8 @@ class ModelSelectorScreen(ModalScreen[tuple[str, str] | None]):
             description: Optional description shown below the title.
             result_callback: Optional callback for selector results when the
                 screen is displayed without a `push_screen` result callback.
+            configured_models: Optional product-owned `(provider:model,
+                provider)` rows to display instead of global discovery.
         """
         super().__init__()
         self._current_model = current_model
@@ -423,11 +426,12 @@ class ModelSelectorScreen(ModalScreen[tuple[str, str] | None]):
         self._title = title
         self._description = description
         self._result_callback = result_callback
+        self._configured_models = tuple(configured_models or ())
         # Standard /model defaults to the curated recommended subset so users
         # face less decision fatigue; onboarding (`curated=True`) already
         # constrains the list via `_curated`, so leaving this False there
         # avoids double-flagging in `_apply_subset`.
-        self._recommended_only = not curated
+        self._recommended_only = not curated and not self._configured_models
         # Rows show friendly display names by default; Ctrl+N flips every row
         # to its raw `provider:model` spec (mirrors the `/theme` picker's
         # label/key toggle) so a user can read or copy the canonical id.
@@ -464,6 +468,8 @@ class ModelSelectorScreen(ModalScreen[tuple[str, str] | None]):
         Returns:
             Styled `Content` for the info line.
         """
+        if self._configured_models:
+            return Content.styled("Showing models configured by Caro")
         if self._filter_text.strip():
             return Content.styled("Searching all models from installed providers")
         if self._recommended_only:
@@ -579,6 +585,7 @@ class ModelSelectorScreen(ModalScreen[tuple[str, str] | None]):
         *,
         include_uninstalled: bool = True,
         include_recent: bool = True,
+        configured_models: Sequence[tuple[str, str]] | None = None,
     ) -> _ModelData:
         """Gather model discovery data synchronously.
 
@@ -599,11 +606,23 @@ class ModelSelectorScreen(ModalScreen[tuple[str, str] | None]):
                 startup default-fallback resolution writes its auto-detected
                 pick into the MRU, which would otherwise surface as a bogus
                 "Recent" entry the user never chose.
+            configured_models: Optional product-owned rows. When provided,
+                global model discovery and install-required recommendations are
+                skipped; the product owns validation and provider setup.
 
         Returns:
             A `_ModelData` bundle of the discovered models, default spec,
                 profiles, recent specs, and install-required provider extras.
         """
+        if configured_models is not None:
+            return _ModelData(
+                list(dict.fromkeys(configured_models)),
+                None,
+                get_model_profiles(cli_override=cli_override),
+                [],
+                {},
+            )
+
         available = get_available_models()
         config = ModelConfig.load()
         all_models: list[tuple[str, str]] = [
@@ -749,11 +768,16 @@ class ModelSelectorScreen(ModalScreen[tuple[str, str] | None]):
 
         # Offload to thread because get_available_models does filesystem I/O
         try:
+            load_kwargs: dict[str, Any] = {
+                "include_uninstalled": True,
+                "include_recent": not self._curated,
+            }
+            if self._configured_models:
+                load_kwargs["configured_models"] = self._configured_models
             data = await asyncio.to_thread(
                 self._load_model_data,
                 self._cli_profile_override,
-                include_uninstalled=True,
-                include_recent=not self._curated,
+                **load_kwargs,
             )
         except Exception:
             logger.exception("Failed to load model data for /model selector")

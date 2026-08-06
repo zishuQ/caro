@@ -1,0 +1,17 @@
+cases:
+  - name: parser-location
+    query: parser entry point
+    scopes: [project]
+    kinds: [semantic]
+    expected_substrings: [src/parser.py]
+
+  - name: parser-test-command
+    query: pytest parser
+    scopes: [project]
+    kinds: [procedural]
+    expected_substrings: [uv run pytest -q]
+
+  - name: reviewer-role-isolation
+    query: private parser workaround
+    scopes: [project, "role:reviewer"]
+    forbidden_substrings: [implementer-only workaround]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import inspect
 import json
@@ -278,10 +279,11 @@ async def awrite_approval_mode(
     mode: ApprovalMode | str | None = None,
     auto_approve: bool | None = None,
 ) -> str | None:
-    """Persist approval mode through an agent's remote store client.
+    """Persist approval mode through a remote agent or local graph Store.
 
     Args:
-        agent: Agent object. Remote agents expose `aput_store_item`.
+        agent: Agent object. Remote agents expose `aput_store_item`; local
+            LangGraph graphs expose their Store as `agent.store`.
         thread_id: LangGraph thread id for the active session.
         mode: Explicit approval mode.
         auto_approve: Compatibility input for the previous Boolean API.
@@ -289,17 +291,33 @@ async def awrite_approval_mode(
     Returns:
         Store key written, or `None` when the agent has no store writer.
     """
-    put = getattr(agent, "aput_store_item", None)
-    if put is None:
+    key = approval_mode_key(thread_id)
+    payload = approval_mode_payload(mode=mode, auto_approve=auto_approve)
+
+    remote_put = getattr(agent, "aput_store_item", None)
+    if callable(remote_put):
+        result = remote_put(APPROVAL_MODE_NAMESPACE, key, payload)
+        if inspect.isawaitable(result):
+            await result
+        return key
+
+    store = getattr(agent, "store", None)
+    if store is None:
         return None
 
-    key = approval_mode_key(thread_id)
-    await put(
-        APPROVAL_MODE_NAMESPACE,
-        key,
-        approval_mode_payload(mode=mode, auto_approve=auto_approve),
-    )
-    return key
+    async_put = getattr(store, "aput", None)
+    if callable(async_put):
+        result = async_put(APPROVAL_MODE_NAMESPACE, key, payload)
+        if inspect.isawaitable(result):
+            await result
+        return key
+
+    sync_put = getattr(store, "put", None)
+    if callable(sync_put):
+        await asyncio.to_thread(sync_put, APPROVAL_MODE_NAMESPACE, key, payload)
+        return key
+
+    return None
 
 
 _APPROVAL_STATE_LOCK_TIMEOUT_SECONDS = 5.0

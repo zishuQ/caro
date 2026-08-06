@@ -286,6 +286,22 @@ class TestTitle:
         """The banner shows the `dcode` title."""
         assert "dcode" in _make_banner()._build_banner().plain
 
+    def test_custom_brand_can_hide_version(self) -> None:
+        """Embedding products can brand the banner without exposing SDK metadata."""
+        with patch(_EDITABLE, return_value=True):
+            banner = WelcomeBanner(
+                brand_name="Caro",
+                show_version=False,
+                model_provider="openai",
+                model_name="gpt-5.6-luna",
+                show_model=True,
+            )
+            plain = banner._build_banner().plain
+        assert "Caro" in plain
+        assert "dcode" not in plain
+        assert f"v{__version__}" not in plain
+        assert "openai:gpt-5.6-luna" in plain
+
     def test_shows_version_by_default(self) -> None:
         """The version is shown when not hidden and not editable."""
         with patch(_EDITABLE, return_value=False):

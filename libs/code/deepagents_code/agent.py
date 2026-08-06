@@ -39,6 +39,7 @@ if TYPE_CHECKING:
     from langgraph.prebuilt.tool_node import ToolCallRequest
     from langgraph.pregel import Pregel
     from langgraph.runtime import Runtime
+    from langgraph.store.base import BaseStore
     from langgraph.types import Command
 
     from deepagents_code.mcp_tools import MCPServerInfo
@@ -2182,6 +2183,8 @@ def create_cli_agent(
     assistant_id: str,
     *,
     tools: Sequence[BaseTool | Callable | dict[str, Any]] | None = None,
+    middleware: Sequence[AgentMiddleware[Any, Any]] | None = None,
+    approval_interrupt_on: dict[str, bool | InterruptOnConfig] | None = None,
     mcp_tools: Sequence[BaseTool] | None = None,
     sandbox: SandboxBackendProtocol | None = None,
     sandbox_type: str | None = None,
@@ -2202,12 +2205,14 @@ def create_cli_agent(
     rubric_max_iterations: int | None = None,
     recursion_limit: int | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
+    store: BaseStore | None = None,
     mcp_server_info: list[MCPServerInfo] | None = None,
     cwd: str | Path | None = None,
     project_context: ProjectContext | None = None,
     async_subagents: list[AsyncSubAgent] | None = None,
     goal_criteria_tools: Sequence[BaseTool | Callable[..., Any]] | None = None,
     rubric_grader_tools: Sequence[BaseTool | Callable[..., Any]] | None = None,
+    model_resolver: Callable[[str], BaseChatModel] | None = None,
 ) -> tuple[Pregel[Any, Any, Any, Any], CompositeBackend]:
     """Create a CLI-configured agent with flexible options.
 
@@ -2218,6 +2223,12 @@ def create_cli_agent(
         model: LLM model to use (e.g., `'provider:model'`)
         assistant_id: Agent identifier for memory/state storage
         tools: Additional tools to provide to agent.
+        middleware: Additional middleware supplied by an embedding product. It
+            is installed around the Code middleware stack without replacing
+            Skills, MCP, Ask User, or the terminal-specific middleware.
+        approval_interrupt_on: Optional embedding-product HITL map. When set,
+            it replaces the default Code approval inventory while preserving
+            the existing approval UI and resume protocol.
         mcp_tools: Exact MCP tools within `tools`, used to extend approval policy
             from their protocol annotations.
         sandbox: Optional sandbox backend for remote execution
@@ -2331,6 +2342,8 @@ def create_cli_agent(
             in `config.toml`, then the default via `resolve_recursion_limit`.
         checkpointer: Optional checkpointer for session persistence.
             When `None`, the graph is compiled without a checkpointer.
+        store: Optional LangGraph Store used for live approval-mode state and
+            other graph-scoped persistent values.
         mcp_server_info: MCP server metadata to surface in the system prompt.
         cwd: Override the working directory for the agent's filesystem backend
             and system prompt.
@@ -2345,6 +2358,9 @@ def create_cli_agent(
         rubric_grader_tools: External read-only context tools available to rubric
             grading for verifying work completed in MCP-backed or web-accessible
             systems.
+        model_resolver: Optional embedding-product resolver for per-invocation model
+            switches. When provided, runtime model overrides use this resolver
+            instead of constructing a second model through Code's provider config.
 
     Returns:
         2-tuple of `(agent_graph, backend)`
@@ -2422,14 +2438,25 @@ def create_cli_agent(
             )
 
     hitl_active = not auto_approve and restrictive_shell_allow_list is None
-    resolved_interrupt_on = (
-        _add_interrupt_on(
+    if hitl_active:
+        default_interrupt_on = _add_interrupt_on(
             mcp_tools=mcp_tools,
             auto_mode_enabled=auto_mode_enabled,
         )
-        if hitl_active
-        else None
-    )
+        if approval_interrupt_on is None:
+            resolved_interrupt_on = default_interrupt_on
+        else:
+            # Caro owns its registered tools while Code still owns approval for
+            # unregistered MCP/network capabilities. Explicit false entries are
+            # honored so a Caro risk threshold cannot be widened by defaults.
+            resolved_interrupt_on = {
+                name: value
+                for name, value in default_interrupt_on.items()
+                if name not in approval_interrupt_on
+            }
+            resolved_interrupt_on.update(approval_interrupt_on)
+    else:
+        resolved_interrupt_on = None
 
     user_agents_dir = settings.get_user_agents_dir(assistant_id)
     project_agents_dir = (
@@ -2446,7 +2473,12 @@ def create_cli_agent(
         if resolved_interrupt_on is not None:
             middleware.append(AsyncApprovalHITLMiddleware(resolved_interrupt_on))
         if not has_explicit_model:
-            middleware.append(ConfigurableModelMiddleware(persist_model_state=False))
+            middleware.append(
+                ConfigurableModelMiddleware(
+                    persist_model_state=False,
+                    model_resolver=model_resolver,
+                )
+            )
         # Interactive turns may legitimately be tool-free, so terminal-stall
         # recovery is installed only on headless stacks. The middleware itself
         # activates only for the measured Fireworks GLM-5.2 endpoint.
@@ -2537,7 +2569,8 @@ def create_cli_agent(
 
     # Build middleware stack based on enabled features
     agent_middleware: list[AgentMiddleware[Any, Any]] = [
-        ConfigurableModelMiddleware(),
+        *(middleware or ()),
+        ConfigurableModelMiddleware(model_resolver=model_resolver),
     ]
     if not interactive:
         agent_middleware.append(_GlmTerminalStallRecovery())
@@ -3041,6 +3074,7 @@ def create_cli_agent(
         interrupt_on=interrupt_on,
         context_schema=CLIContextSchema,
         checkpointer=checkpointer,
+        store=store,
         subagents=all_subagents or None,
         name=_sanitize_agent_message_name(assistant_id),
     ).with_config({**config, "recursion_limit": effective_recursion_limit})

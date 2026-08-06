@@ -1804,6 +1804,19 @@ class _SequencedAgent:
             yield chunk
 
 
+class _ManualOnlyAgent:
+    """Minimal local graph double without a Store implementation."""
+
+    def __init__(self) -> None:
+        self.stream_calls = 0
+
+    async def astream(self, *_: Any, **__: Any) -> AsyncIterator[tuple[Any, ...]]:
+        """Complete a no-op stream without exposing approval persistence."""
+        self.stream_calls += 1
+        if False:
+            yield ()
+
+
 class _FailingApprovalStoreAgent(_SequencedAgent):
     """Agent test double whose approval-mode store writes fail."""
 
@@ -1874,6 +1887,33 @@ class TestExecuteTaskTextualTurnMarkers:
         assert second_meta["dcode_auto_approve"] is True
         # The session state itself reflects the latest turn.
         assert session_state.turn_number == 2
+
+    async def test_manual_mode_runs_without_a_store(self) -> None:
+        """Manual approval remains safe for local graphs without Store support."""
+        from deepagents_code.app import TextualSessionState
+
+        agent = _ManualOnlyAgent()
+        session_state = TextualSessionState(
+            thread_id="thread-1",
+            approval_mode=ApprovalMode.MANUAL,
+            auto_approve=False,
+        )
+        adapter = TextualUIAdapter(
+            mount_message=_mock_mount,
+            update_status=_noop_status,
+            request_approval=_mock_approval,
+        )
+
+        await execute_task_textual(
+            user_input="hello",
+            agent=agent,
+            assistant_id="assistant",
+            session_state=session_state,
+            adapter=adapter,
+        )
+
+        assert agent.stream_calls == 1
+        assert session_state.approval_mode_key is None
 
     async def test_auto_approve_absent_from_stream_config_when_disabled(self) -> None:
         """A manual-approval session must not label its trace as auto-approve.

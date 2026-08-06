@@ -4521,6 +4521,30 @@ class TestPasteBurstEnterSuppression:
             assert len(app.submitted) == 0
             assert "\n" in ta.text
 
+    async def test_rapid_single_line_input_submits_after_quiet_period(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A rapid single-line input followed immediately by Enter submits."""
+        monkeypatch.setattr(paste_textarea_module, "PASTE_BURST_CHAR_GAP_SECONDS", 60.0)
+        monkeypatch.setattr(
+            paste_textarea_module, "PASTE_BURST_SUBMIT_DELAY_SECONDS", 0.01
+        )
+
+        app = _RecordingApp()
+        async with app.run_test() as pilot:
+            chat = app.query_one(ChatInput)
+            ta = chat._text_area
+            assert ta is not None
+
+            for char in "hello":
+                await pilot.press(char)
+            await pilot.press("enter")
+            await pilot.pause(0.05)
+
+            assert len(app.submitted) == 1
+            assert app.submitted[0].value == "hello"
+            assert ta.text == ""
+
     async def test_slow_typing_then_enter_submits(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

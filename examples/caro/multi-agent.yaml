@@ -1,0 +1,117 @@
+routing:
+  default: openai_primary
+  models:
+    openai_primary:
+      model: openai:gpt-5.6-sol
+      temperature: 0.0
+      max_retries: 2
+    deepseek_analysis:
+      model: deepseek:deepseek-v4-flash
+      temperature: 0.0
+      max_retries: 2
+    anthropic_review:
+      model: anthropic:claude-sonnet-4-6
+      max_retries: 2
+  rules: []
+  fallbacks: [anthropic_review]
+
+approvals:
+  enabled: true
+  minimum_risk: high
+
+workspace:
+  root: .
+  shell_enabled: true
+  shell_timeout_seconds: 120
+  inherit_environment: false
+  allowed_environment: [PATH, LANG, LC_ALL, TERM]
+
+state:
+  directory: .caro
+
+memory:
+  enabled: true
+  sources: [.caro/memory/AGENTS.md]
+  initialize_missing: true
+  max_file_bytes: 131072
+  structured_enabled: true
+  structured_database: memory.sqlite3
+  auto_retrieve: true
+  retrieval_limit: 8
+  max_injected_chars: 12000
+  minimum_importance: 0.2
+  minimum_confidence: 0.6
+  max_item_chars: 4000
+  episodic_ttl_days: 90
+
+orchestration:
+  enabled: true
+  max_parallel_agents: 3
+  allow_nested_delegation: true
+  max_report_chars: 20000
+  max_handoff_chars: 40000
+  agents:
+    investigator:
+      description: Reproduce the problem and collect code, test, and dependency evidence without editing files.
+      system_prompt: Focus on evidence, reproduction steps, relevant files, and likely root causes.
+      model: deepseek_analysis
+      memory: true
+      shell_enabled: false
+    architect:
+      description: Analyze design constraints and propose the smallest compatible implementation plan.
+      system_prompt: Identify API boundaries, invariants, compatibility risks, and a concrete patch plan.
+      model: anthropic_review
+      memory: true
+      shell_enabled: false
+      delegates:
+        - name: focused_researcher
+          description: Perform a focused repository lookup and return evidence only.
+          system_prompt: Inspect the workspace for the requested detail. Do not edit files or delegate further.
+          model: deepseek_analysis
+    implementer:
+      description: Implement the approved fix or feature and run focused validation.
+      system_prompt: Use prior evidence, make focused edits, and report every changed file and command result.
+      model: openai_primary
+      memory: true
+      shell_enabled: true
+    reviewer:
+      description: Review the implementation for correctness, regressions, security, and scope compliance.
+      system_prompt: Inspect the actual diff and files. Report blocking findings separately from suggestions.
+      model: anthropic_review
+      memory: true
+      shell_enabled: false
+    tester:
+      description: Run relevant tests and static checks, then report exact failures and coverage gaps.
+      system_prompt: Validate independently. Do not hide failures or claim commands that were not run.
+      model: openai_primary
+      memory: true
+      shell_enabled: true
+    synthesizer:
+      description: Produce the final operator-facing result from all implementation and verification reports.
+      system_prompt: Reconcile disagreements, state the outcome first, and clearly list unresolved blockers.
+      model: openai_primary
+      memory: true
+      shell_enabled: false
+  stages:
+    - name: analysis
+      agents: [investigator, architect]
+    - name: implementation
+      agents: [implementer]
+    - name: verification
+      agents: [reviewer, tester]
+    - name: synthesis
+      agents: [synthesizer]
+
+langfuse:
+  enabled: false
+  environment: local
+  tags: [caro, multi-agent]
+
+graph:
+  recursion_limit: 9999
+  stream_modes: [messages, updates, tasks, checkpoints]
+  history_limit: 100
+
+system_prompt: |-
+  You are Caro, a governed terminal coding agent.
+  Work only inside the configured workspace and preserve unrelated user changes.

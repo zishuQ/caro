@@ -255,6 +255,21 @@ async def test_awrite_approval_mode_writes_payload() -> None:
     ]
 
 
+async def test_awrite_approval_mode_writes_local_graph_store() -> None:
+    """Local compiled graphs use their LangGraph Store for live mode state."""
+    from langgraph.store.memory import InMemoryStore
+
+    class _LocalGraph:
+        def __init__(self) -> None:
+            self.store = InMemoryStore()
+
+    graph = _LocalGraph()
+    key = await awrite_approval_mode(graph, "thread-1", mode=ApprovalMode.AUTO)
+
+    assert key == approval_mode_key("thread-1")
+    assert read_approval_mode_from_store(graph.store, key) is ApprovalMode.AUTO
+
+
 async def test_awrite_approval_mode_returns_none_without_writer() -> None:
     assert (
         await awrite_approval_mode(object(), "thread-1", mode=ApprovalMode.AUTO)

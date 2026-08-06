@@ -34,6 +34,9 @@ if TYPE_CHECKING:
 
     from deepagents_code.config import ModelResult
 
+    ModelResolver = Callable[[str], BaseChatModel]
+    """Resolve a runtime model spec through an embedding application's model pool."""
+
 
 logger = logging.getLogger(__name__)
 
@@ -313,12 +316,44 @@ def _model_spec_from_result(
     return _model_spec_from_model(model)
 
 
+def patch_model_identity(request: ModelRequest, model_spec: str) -> ModelRequest:
+    """Update the dynamic model identity in a request's system prompt.
+
+    Embedding products may resolve a runtime model through their own model pool,
+    so no `ModelResult` is available for the standard Code identity patch. The
+    canonical `provider:model` spec is still sufficient to keep the prompt and
+    model behavior aligned.
+
+    Args:
+        request: Model request whose system prompt may contain model identity.
+        model_spec: Canonical `provider:model` identifier for the active model.
+
+    Returns:
+        The request with a patched system prompt, or the original request when
+        no identity section is present.
+    """
+    prompt = request.system_prompt
+    if not prompt or "### Model Identity" not in prompt:
+        return request
+    provider, separator, model_name = model_spec.partition(":")
+    if not separator or not provider or not model_name:
+        return request
+    from deepagents_code.agent import MODEL_IDENTITY_RE, build_model_identity_section
+
+    identity = build_model_identity_section(model_name, provider=provider)
+    patched = MODEL_IDENTITY_RE.sub(identity, prompt, count=1)
+    if patched == prompt:
+        return request
+    return request.override(system_prompt=patched)
+
+
 def _build_overrides(
     request: ModelRequest,
     ctx: CLIContextSchema,
     model_result: ModelResult | None,
     *,
     openai_prompt_cache_key: bool,
+    resolved_model_spec: str | None = None,
 ) -> ModelRequest:
     """Build the overridden request from a (possibly resolved) model result.
 
@@ -336,6 +371,9 @@ def _build_overrides(
             when no model swap was requested.
         openai_prompt_cache_key: Whether OpenAI `prompt_cache_key` injection is
             enabled (the resolved `models.openai_prompt_cache_key` opt-out).
+        resolved_model_spec: Canonical model spec supplied by an embedding
+            product resolver. Unlike `model_result`, this path has no provider
+            metadata object, so the spec is also used to patch model identity.
 
     Returns:
         The original request when no overrides apply, otherwise a new request
@@ -343,7 +381,13 @@ def _build_overrides(
     """
     overrides: dict[str, Any] = {}
 
-    new_model = model_result.model if model_result is not None else None
+    new_model = (
+        model_result.model
+        if model_result is not None
+        else request.model
+        if resolved_model_spec is not None
+        else None
+    )
     if new_model is not None:
         overrides["model"] = new_model
 
@@ -436,12 +480,23 @@ def _build_overrides(
                 "prompt template.",
                 model_result.model_name,
             )
+    elif resolved_model_spec is not None and request.system_prompt:
+        # Embedding products resolve models through their own pool, so there is
+        # no `ModelResult` to provide metadata. Keep the identity section in
+        # sync with the canonical spec rather than leaving the startup model in
+        # the prompt (which can make a switched model misidentify itself).
+        identity_request = patch_model_identity(request, resolved_model_spec)
+        if identity_request is not request:
+            overrides["system_message"] = identity_request.system_message
 
     return request.override(**overrides)
 
 
 def _apply_overrides(
-    request: ModelRequest, *, openai_prompt_cache_key: bool
+    request: ModelRequest,
+    *,
+    openai_prompt_cache_key: bool,
+    model_resolver: ModelResolver | None = None,
 ) -> _ResolvedModelRequest:
     """Apply model/param overrides and return checkpoint persistence metadata.
 
@@ -455,6 +510,8 @@ def _apply_overrides(
         request: The incoming model request from the middleware chain.
         openai_prompt_cache_key: The resolved `models.openai_prompt_cache_key`
             opt-out, threaded through to `_build_overrides`.
+        model_resolver: Optional embedding-product callback used to resolve a
+            runtime model spec through an existing model pool.
 
     Returns:
         The request to send downstream plus the actual model spec and user-supplied
@@ -465,45 +522,57 @@ def _apply_overrides(
         return _ResolvedModelRequest(request, _model_spec_from_model(request.model))
 
     model_result = None
+    resolved_model_spec: str | None = None
     model = ctx.model
     if model and not model_matches_spec(request.model, model):
-        from deepagents_code.config import create_model
-        from deepagents_code.model_config import ModelConfigError
-
         logger.debug("Overriding model to %s", model)
-        model_kwargs = (
-            {"profile_overrides": ctx.profile_overrides}
-            if ctx.profile_overrides
-            else {}
-        )
-        try:
-            model_result = create_model(model, **model_kwargs)
-        except ModelConfigError:
-            logger.exception(
-                "Failed to resolve runtime model override '%s'; "
-                "continuing with current model",
-                model,
+        if model_resolver is not None:
+            request = request.override(model=model_resolver(model))
+            resolved_model_spec = model
+        else:
+            from deepagents_code.config import create_model
+            from deepagents_code.model_config import ModelConfigError
+
+            model_kwargs = (
+                {"profile_overrides": ctx.profile_overrides}
+                if ctx.profile_overrides
+                else {}
             )
-            return _ResolvedModelRequest(
-                request,
-                _model_spec_from_model(request.model),
-                model_params_known=True,
-            )
+            try:
+                model_result = create_model(model, **model_kwargs)
+            except ModelConfigError:
+                logger.exception(
+                    "Failed to resolve runtime model override '%s'; "
+                    "continuing with current model",
+                    model,
+                )
+                return _ResolvedModelRequest(
+                    request,
+                    _model_spec_from_model(request.model),
+                    model_params_known=True,
+                )
 
     updated = _build_overrides(
-        request, ctx, model_result, openai_prompt_cache_key=openai_prompt_cache_key
+        request,
+        ctx,
+        model_result,
+        openai_prompt_cache_key=openai_prompt_cache_key,
+        resolved_model_spec=resolved_model_spec,
     )
     params = dict(ctx.model_params) if ctx.model_params else None
     return _ResolvedModelRequest(
         updated,
-        _model_spec_from_result(model_result, updated.model),
+        resolved_model_spec or _model_spec_from_result(model_result, updated.model),
         params,
         model_params_known=True,
     )
 
 
 async def _apply_overrides_async(
-    request: ModelRequest, *, openai_prompt_cache_key: bool
+    request: ModelRequest,
+    *,
+    openai_prompt_cache_key: bool,
+    model_resolver: ModelResolver | None = None,
 ) -> _ResolvedModelRequest:
     """Async variant of `_apply_overrides` that offloads model construction.
 
@@ -511,6 +580,8 @@ async def _apply_overrides_async(
         request: The incoming model request from the middleware chain.
         openai_prompt_cache_key: The resolved `models.openai_prompt_cache_key`
             opt-out, threaded through to `_build_overrides`.
+        model_resolver: Optional embedding-product callback used to resolve a
+            runtime model spec through an existing model pool.
 
     Returns:
         The request to send downstream plus the actual model spec and user-supplied
@@ -521,42 +592,52 @@ async def _apply_overrides_async(
         return _ResolvedModelRequest(request, _model_spec_from_model(request.model))
 
     model_result = None
+    resolved_model_spec: str | None = None
     model = ctx.model
     if model and not model_matches_spec(request.model, model):
-        from deepagents_code.config import create_model
-        from deepagents_code.model_config import ModelConfigError
-
         logger.debug("Overriding model to %s", model)
-        model_kwargs = (
-            {"profile_overrides": ctx.profile_overrides}
-            if ctx.profile_overrides
-            else {}
-        )
-        try:
-            model_result = await asyncio.to_thread(
-                create_model,
-                model,
-                **model_kwargs,
+        if model_resolver is not None:
+            resolved_model = await asyncio.to_thread(model_resolver, model)
+            request = request.override(model=resolved_model)
+            resolved_model_spec = ctx.model
+        else:
+            from deepagents_code.config import create_model
+            from deepagents_code.model_config import ModelConfigError
+
+            model_kwargs = (
+                {"profile_overrides": ctx.profile_overrides}
+                if ctx.profile_overrides
+                else {}
             )
-        except ModelConfigError:
-            logger.exception(
-                "Failed to resolve runtime model override '%s'; "
-                "continuing with current model",
-                model,
-            )
-            return _ResolvedModelRequest(
-                request,
-                _model_spec_from_model(request.model),
-                model_params_known=True,
-            )
+            try:
+                model_result = await asyncio.to_thread(
+                    create_model,
+                    model,
+                    **model_kwargs,
+                )
+            except ModelConfigError:
+                logger.exception(
+                    "Failed to resolve runtime model override '%s'; "
+                    "continuing with current model",
+                    model,
+                )
+                return _ResolvedModelRequest(
+                    request,
+                    _model_spec_from_model(request.model),
+                    model_params_known=True,
+                )
 
     updated = _build_overrides(
-        request, ctx, model_result, openai_prompt_cache_key=openai_prompt_cache_key
+        request,
+        ctx,
+        model_result,
+        openai_prompt_cache_key=openai_prompt_cache_key,
+        resolved_model_spec=resolved_model_spec,
     )
     params = dict(ctx.model_params) if ctx.model_params else None
     return _ResolvedModelRequest(
         updated,
-        _model_spec_from_result(model_result, updated.model),
+        resolved_model_spec or _model_spec_from_result(model_result, updated.model),
         params,
         model_params_known=True,
     )
@@ -600,6 +681,7 @@ class ConfigurableModelMiddleware(AgentMiddleware):
         *,
         persist_model_state: bool = True,
         openai_prompt_cache_key: bool | None = None,
+        model_resolver: ModelResolver | None = None,
     ) -> None:
         """Initialize the middleware.
 
@@ -618,8 +700,11 @@ class ConfigurableModelMiddleware(AgentMiddleware):
                 `_resolve_openai_prompt_cache_key_enabled` re-raises rather than
                 masks. Pass an explicit bool to bypass the config read (mainly
                 for tests).
+            model_resolver: Optional embedding-product callback used to resolve
+                runtime model specs through an existing model pool.
         """
         self._persist_model_state = persist_model_state
+        self._model_resolver = model_resolver
         self._openai_prompt_cache_key = (
             _resolve_openai_prompt_cache_key_enabled()
             if openai_prompt_cache_key is None
@@ -638,7 +723,9 @@ class ConfigurableModelMiddleware(AgentMiddleware):
             completed call has model metadata to checkpoint.
         """
         resolved = _apply_overrides(
-            request, openai_prompt_cache_key=self._openai_prompt_cache_key
+            request,
+            openai_prompt_cache_key=self._openai_prompt_cache_key,
+            model_resolver=self._model_resolver,
         )
         response = handler(resolved.request)
         command = _checkpoint_command(resolved) if self._persist_model_state else None
@@ -658,7 +745,9 @@ class ConfigurableModelMiddleware(AgentMiddleware):
             completed call has model metadata to checkpoint.
         """
         resolved = await _apply_overrides_async(
-            request, openai_prompt_cache_key=self._openai_prompt_cache_key
+            request,
+            openai_prompt_cache_key=self._openai_prompt_cache_key,
+            model_resolver=self._model_resolver,
         )
         response = await handler(resolved.request)
         command = _checkpoint_command(resolved) if self._persist_model_state else None

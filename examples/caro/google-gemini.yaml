@@ -1,0 +1,20 @@
+routing:
+  default: gemini
+  models:
+    gemini:
+      model: google_genai:gemini-2.5-pro
+      temperature: 0.0
+  fallbacks: []
+approvals:
+  enabled: true
+  minimum_risk: high
+workspace:
+  root: .
+  shell_enabled: true
+state:
+  directory: .caro
+memory:
+  enabled: true
+  sources: [.caro/memory/AGENTS.md]
+langfuse:
+  enabled: false

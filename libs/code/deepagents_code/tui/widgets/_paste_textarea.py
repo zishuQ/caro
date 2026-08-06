@@ -43,6 +43,16 @@ PASTE_BURST_CHAR_GAP_SECONDS = 0.03
 PASTE_BURST_FLUSH_DELAY_SECONDS = 0.08
 """Idle timeout before flushing buffered burst text."""
 
+PASTE_BURST_SUBMIT_DELAY_SECONDS = 0.12
+"""Short grace period before submitting after a buffered Enter.
+
+When a terminal has no bracketed-paste support, a single-line paste followed
+by the user's Enter is indistinguishable from the first newline of a
+multi-line paste.  Delaying submission briefly lets a following key event
+declare that the Enter belonged to the paste, without making ordinary input
+feel sluggish.
+"""
+
 PASTE_BURST_START_CHARS = {"'", '"'}
 """Characters that can start dropped-path payloads."""
 
@@ -123,6 +133,8 @@ class PasteBurstTextArea(TextArea):
     _paste_burst_last_key_time: float | None
     _paste_burst_last_suppressed_enter_time: float | None
     _paste_burst_window_until: float | None
+    _paste_burst_submit_timer: Timer | None
+    _paste_burst_submit_pending: bool
     _backslash_pending_time: float | None
 
     def __init__(self, **kwargs: Any) -> None:
@@ -146,6 +158,8 @@ class PasteBurstTextArea(TextArea):
         # Deadline until which `enter` inserts a newline rather than submitting,
         # keeping multi-line pastes grouped across read boundaries.
         self._paste_burst_window_until = None
+        self._paste_burst_submit_timer = None
+        self._paste_burst_submit_pending = False
         # Timestamp of a `\` keypress awaiting a fast `enter` to be treated as a
         # terminal-emitted shift+enter. See `_BACKSLASH_ENTER_GAP_SECONDS`.
         self._backslash_pending_time = None
@@ -160,9 +174,52 @@ class PasteBurstTextArea(TextArea):
         """
         return False
 
+    def _defer_burst_enter_submission(self) -> bool:  # noqa: PLR6301
+        """Return whether a buffered Enter should use delayed submission.
+
+        The chat input needs to distinguish an immediate submit from a
+        newline replayed by an unbracketed paste. Inline prompts retain their
+        historical behavior of buffering the newline itself so a complete
+        paste can be collapsed atomically.
+        """
+        return False
+
     async def _dispatch_burst_payload(self, payload: str) -> None:
         """Handle a flushed burst payload. Base behavior inserts it verbatim."""
         self.insert(payload)
+
+    async def _dispatch_burst_submission(self) -> None:
+        """Submit the current value after a buffered Enter settles.
+
+        Concrete inputs override this hook because each input surface owns its
+        own submission message type.  The base text area has no submit action.
+        """
+
+    def _cancel_paste_burst_submit(self) -> None:
+        """Cancel a deferred submission caused by a buffered Enter."""
+        self._paste_burst_submit_pending = False
+        if self._paste_burst_submit_timer is None:
+            return
+        self._paste_burst_submit_timer.stop()
+        self._paste_burst_submit_timer = None
+
+    def _schedule_paste_burst_submit(self) -> None:
+        """Schedule submission after the paste-continuation grace period."""
+        self._cancel_paste_burst_submit()
+        self._paste_burst_submit_pending = True
+        self._paste_burst_submit_timer = self.set_timer(
+            PASTE_BURST_SUBMIT_DELAY_SECONDS,
+            self._flush_deferred_paste_burst_submit,
+        )
+
+    async def _flush_deferred_paste_burst_submit(self) -> None:
+        """Submit a buffered Enter that received no paste continuation."""
+        self._paste_burst_submit_timer = None
+        if not self._paste_burst_submit_pending:
+            return
+        self._paste_burst_submit_pending = False
+        await self._flush_paste_burst()
+        await self._dispatch_burst_submission()
 
     # -- Burst state machine --------------------------------------------------
 
@@ -224,6 +281,7 @@ class PasteBurstTextArea(TextArea):
         self._paste_burst_buffer = ""
         self._paste_burst_last_char_time = None
         self._paste_burst_window_until = None
+        self._cancel_paste_burst_submit()
         self._backslash_pending_time = None
         self._reset_paste_burst_run()
         self._cancel_paste_burst_timer()
@@ -325,10 +383,31 @@ class PasteBurstTextArea(TextArea):
             it; `False` when there is no active burst (or it was just flushed)
             and the caller should continue normal key handling.
         """
+        if self._paste_burst_submit_pending and (
+            event.key == "enter"
+            or (event.is_printable and event.character is not None)
+        ):
+            # A key arriving during the grace period proves that the
+            # previous Enter was embedded in a multi-line paste. Restore
+            # that newline before handling the new key.
+            self._cancel_paste_burst_submit()
+            self._reset_paste_burst_run()
+            self._paste_burst_window_until = (
+                now + PASTE_ENTER_SUPPRESS_WINDOW_SECONDS
+            )
+            self._paste_burst_last_suppressed_enter_time = now
+            self.action_insert_newline()
+            if event.key == "enter":
+                return True
+
         if not self._paste_burst_buffer:
             return False
         if event.key == "enter":
-            self._append_paste_burst("\n", now)
+            if not self._defer_burst_enter_submission():
+                self._append_paste_burst("\n", now)
+                return True
+            await self._flush_paste_burst()
+            self._schedule_paste_burst_submit()
             return True
         if event.is_printable and event.character is not None:
             last_time = self._paste_burst_last_char_time

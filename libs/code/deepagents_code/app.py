@@ -15,6 +15,7 @@ import time
 import uuid
 import webbrowser
 from collections import deque
+from collections.abc import Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -130,6 +131,9 @@ _DEFERRED_START_NOTICE = (
     "No model is configured yet. Run `/model` to choose one. "
     "Deep Agents will ask for credentials for the selected provider."
 )
+
+LocalModelResolver = Callable[[str, dict[str, Any] | None], Awaitable[str]]
+"""Resolve a local-app model selection to a governed canonical spec."""
 
 
 def _parse_rubric_max_iterations(raw: str) -> tuple[int | None, str | None]:
@@ -575,11 +579,8 @@ ScreenResultT = TypeVar("ScreenResultT")
 if TYPE_CHECKING:
     from collections.abc import (
         AsyncIterator,
-        Awaitable,
-        Callable,
         Coroutine,
         Mapping,
-        Sequence,
     )
 
     from deepagents.backends import CompositeBackend
@@ -2851,6 +2852,12 @@ class DeepAgentsApp(App):
         hook_trust: WorkspaceTrust | None = None,
         title: str | None = None,
         sub_title: str | None = None,
+        banner_brand: str = "dcode",
+        banner_show_version: bool | None = None,
+        banner_show_model: bool | None = None,
+        local_model_resolver: LocalModelResolver | None = None,
+        configured_models: Sequence[tuple[str, str]] | None = None,
+        model_config_path: Path | None = None,
         **kwargs: Any,
     ) -> None:
         """Initialize the Deep Agents application.
@@ -2934,6 +2941,18 @@ class DeepAgentsApp(App):
                 substituted; otherwise the parent default is used.
 
                 Reassigning `app.sub_title` at runtime updates the header live.
+            banner_brand: Product name rendered by the welcome banner.
+            banner_show_version: Whether the welcome banner renders the package
+                version. `None` preserves the environment-controlled default.
+            banner_show_model: Whether the welcome banner renders the active
+                model row. `None` preserves the environment-controlled default.
+            local_model_resolver: Optional product callback used to resolve
+                `/model` selections for an in-process graph.
+            configured_models: Optional `(provider:model, provider)` rows for a
+                product-owned model pool. When provided, `/model` shows these
+                rows instead of the global provider catalog.
+            model_config_path: Optional config file used for per-model effort
+                preferences. `None` keeps the DeepAgents global config path.
             **kwargs: Additional arguments passed to parent
         """
         super().__init__(**kwargs)
@@ -2941,6 +2960,14 @@ class DeepAgentsApp(App):
             self.title = title
         if sub_title is not None:
             self.sub_title = sub_title
+        self._banner_brand = banner_brand
+        self._banner_show_version = banner_show_version
+        self._banner_show_model = banner_show_model
+        self._local_model_resolver = local_model_resolver
+        self._configured_models = tuple(configured_models or ())
+        self._model_config_path = (
+            model_config_path.expanduser() if model_config_path else None
+        )
 
         self._register_custom_themes()
         self._hook_trust: WorkspaceTrust | None = hook_trust
@@ -3985,6 +4012,9 @@ class DeepAgentsApp(App):
         # `_ChatScroll` keeps clicks on messages from stealing input focus.
         with _ChatScroll(id="chat"):
             yield WelcomeBanner(
+                brand_name=self._banner_brand,
+                show_version=self._banner_show_version,
+                show_model=self._banner_show_model,
                 model_provider=settings.model_provider or "",
                 model_name=settings.model_name or "",
                 cwd=self._cwd,
@@ -14819,6 +14849,7 @@ class DeepAgentsApp(App):
     def _sync_status_model(self) -> None:
         """Update model displays and the `/effort` hint for the active model."""
         from deepagents_code.config import settings
+        from deepagents_code.model_config import ModelSpec
         from deepagents_code.reasoning_effort import (
             current_effort_from_model_params,
             default_effort_for_model,
@@ -14828,6 +14859,11 @@ class DeepAgentsApp(App):
         provider = settings.model_provider or ""
         model = settings.model_name or ""
         spec = self._effective_model_spec()
+        if spec:
+            parsed = ModelSpec.try_parse(spec)
+            if parsed is not None:
+                provider = parsed.provider
+                model = parsed.model
         if self._chat_input is not None:
             try:
                 efforts = supported_efforts_for_model(
@@ -14898,7 +14934,11 @@ class DeepAgentsApp(App):
 
         if has_explicit_effort_model_params(model_spec, self._model_params_override):
             return
-        effort = await asyncio.to_thread(load_effort_for_model, model_spec)
+        effort = await asyncio.to_thread(
+            load_effort_for_model,
+            model_spec,
+            self._model_config_path,
+        )
         if effort is None:
             return
         if not is_effort_supported_for_model(
@@ -14912,7 +14952,11 @@ class DeepAgentsApp(App):
             # UI error, because the user did not request this clear. The
             # interactive `/effort clear` path does surface failures, since
             # there the clear is user-initiated.
-            if not await asyncio.to_thread(clear_effort_for_model, model_spec):
+            if not await asyncio.to_thread(
+                clear_effort_for_model,
+                model_spec,
+                self._model_config_path,
+            ):
                 logger.warning(
                     "Could not clear invalid reasoning effort %r for %s",
                     effort,
@@ -15048,7 +15092,11 @@ class DeepAgentsApp(App):
             self._model_params_override = without_effort_model_params(
                 spec, self._model_params_override
             )
-            saved = await asyncio.to_thread(clear_effort_for_model, spec)
+            saved = await asyncio.to_thread(
+                clear_effort_for_model,
+                spec,
+                self._model_config_path,
+            )
             self._sync_status_model()
             if not saved:
                 await self._mount_message(
@@ -15092,7 +15140,12 @@ class DeepAgentsApp(App):
         self._model_params_override = with_effort_model_params(
             spec, self._model_params_override, matched_effort
         )
-        saved = await asyncio.to_thread(save_effort_for_model, spec, matched_effort)
+        saved = await asyncio.to_thread(
+            save_effort_for_model,
+            spec,
+            matched_effort,
+            self._model_config_path,
+        )
         self._sync_status_model()
         if not saved:
             await self._mount_message(
@@ -18752,11 +18805,15 @@ class DeepAgentsApp(App):
             Configured model selector modal.
         """
         from deepagents_code.config import settings
+        from deepagents_code.model_config import ModelSpec
         from deepagents_code.tui.widgets.model_selector import ModelSelectorScreen
 
+        current_spec = self._effective_model_spec()
+        current = ModelSpec.try_parse(current_spec) if current_spec else None
+
         return ModelSelectorScreen(
-            current_model=settings.model_name,
-            current_provider=settings.model_provider,
+            current_model=current.model if current else settings.model_name,
+            current_provider=current.provider if current else settings.model_provider,
             cli_profile_override=self._profile_override,
             curated=curated,
             title="Choose a Recommended Model" if curated else None,
@@ -18769,6 +18826,7 @@ class DeepAgentsApp(App):
                 else None
             ),
             result_callback=result_callback,
+            configured_models=self._configured_models or None,
         )
 
     async def _show_model_selector(
@@ -24301,10 +24359,11 @@ class DeepAgentsApp(App):
     ) -> None:
         """Switch to a new model, preserving conversation history.
 
-        This requires a server-backed interactive session. It sets a model
-        override that `ConfigurableModelMiddleware` picks up on the next
-        invocation, so the conversation thread stays intact and no server
-        restart is required.
+        For a server-backed session this sets a model override that
+        `ConfigurableModelMiddleware` picks up on the next invocation. Product
+        adapters may provide a local resolver for the same in-process path, so
+        the conversation thread stays intact and no graph/server restart is
+        required.
 
         Args:
             model_spec: The model specification to switch to.
@@ -24349,7 +24408,41 @@ class DeepAgentsApp(App):
             # treat ":claude-opus-4-6" as "claude-opus-4-6"
             model_spec = model_spec.removeprefix(":")
 
-            if not self._remote_agent():
+            local_session = self._remote_agent() is None
+            if local_session and self._local_model_resolver is not None:
+                if self._connecting:
+                    from functools import partial
+
+                    self._defer_action(
+                        DeferredAction(
+                            kind="model_switch",
+                            execute=partial(
+                                self._switch_model,
+                                model_spec,
+                                extra_kwargs=extra_kwargs,
+                                announce_unchanged=announce_unchanged,
+                                persist=persist,
+                                from_resume=from_resume,
+                            ),
+                        ),
+                    )
+                    self.notify(
+                        "Model will switch once the session is ready.",
+                        timeout=3,
+                    )
+                    return
+                try:
+                    model_spec = await self._local_model_resolver(
+                        model_spec,
+                        extra_kwargs,
+                    )
+                except Exception as exc:
+                    logger.warning("Caro local model switch failed", exc_info=True)
+                    await self._mount_message(
+                        ErrorMessage(f"Could not switch model: {exc}"),
+                    )
+                    return
+            elif local_session:
                 if self._connecting:
                     from functools import partial
 
@@ -24396,8 +24489,14 @@ class DeepAgentsApp(App):
                 model_name = model_spec
                 provider = detect_provider(model_spec)
 
-            # Check credentials
-            auth_status = get_provider_auth_status(provider) if provider else None
+            # Caro's local resolver already initialized the configured pool model
+            # with its own credentials and endpoint. Remote Code sessions still
+            # use the normal provider-auth diagnostics.
+            auth_status = (
+                get_provider_auth_status(provider)
+                if provider and not local_session
+                else None
+            )
             if auth_status is not None and auth_status.blocks_start:
                 if from_resume:
                     await self._mount_resume_adoption_failure(
@@ -24424,11 +24523,24 @@ class DeepAgentsApp(App):
                     provider,
                 )
 
+            # Build the provider:model spec for the configurable middleware.
+            display = model_spec
+            if provider and not parsed:
+                display = f"{provider}:{model_name}"
+
             # Check if already using this exact model
-            if model_name == settings.model_name and (
-                not provider or provider == settings.model_provider
-            ):
-                current = f"{settings.model_provider}:{settings.model_name}"
+            same_model = (
+                display == self._effective_model_spec()
+                if local_session
+                else model_name == settings.model_name
+                and (not provider or provider == settings.model_provider)
+            )
+            if same_model:
+                current = (
+                    display
+                    if local_session
+                    else f"{settings.model_provider}:{settings.model_name}"
+                )
                 # Mirror the regular-switch path so `--model-params` semantics
                 # are consistent across same-model and different-model cases:
                 # passing params applies them, omitting params clears any
@@ -24450,46 +24562,44 @@ class DeepAgentsApp(App):
                 )
                 return
 
-            # Build the provider:model spec for the configurable middleware.
-            display = model_spec
-            if provider and not parsed:
-                display = f"{provider}:{model_name}"
-
             # Provider package imports (e.g. langchain_google_genai) can take a
             # noticeable moment; show an animated busy indicator so it doesn't look
             # frozen. The work itself already runs off the event loop via
             # `asyncio.to_thread`, so the UI stays responsive meanwhile.
-            if self._status_bar:
+            if local_session:
+                resolved_spec = display
+            if not local_session and self._status_bar:
                 self._status_bar.set_busy("Switching model")
-            try:
-                result = await asyncio.to_thread(
-                    _create_model_with_deepagents_import_lock,
-                    display,
-                    extra_kwargs=extra_kwargs,
-                    profile_overrides=self._profile_override,
-                )
-                result.apply_to_settings()
-            except Exception as exc:
-                logger.exception("Failed to resolve model metadata for %s", display)
-                if from_resume:
-                    await self._mount_resume_adoption_failure(
-                        display, "the model could not be initialized"
+            if not local_session:
+                try:
+                    result = await asyncio.to_thread(
+                        _create_model_with_deepagents_import_lock,
+                        display,
+                        extra_kwargs=extra_kwargs,
+                        profile_overrides=self._profile_override,
                     )
-                else:
-                    await self._mount_message(
-                        ErrorMessage(_build_model_switch_error_body(exc)),
-                    )
-                return
-            finally:
-                if self._status_bar:
-                    self._status_bar.set_busy("")
+                    result.apply_to_settings()
+                    resolved_spec = f"{result.provider}:{result.model_name}"
+                except Exception as exc:
+                    logger.exception("Failed to resolve model metadata for %s", display)
+                    if from_resume:
+                        await self._mount_resume_adoption_failure(
+                            display, "the model could not be initialized"
+                        )
+                    else:
+                        await self._mount_message(
+                            ErrorMessage(_build_model_switch_error_body(exc)),
+                        )
+                    return
+                finally:
+                    if self._status_bar:
+                        self._status_bar.set_busy("")
 
             # Set the model override for ConfigurableModelMiddleware.
             # The next stream call passes CLIContext via context= and the
             # middleware swaps the model per-invocation — no graph recreation.
             self._model_override = display
             self._model_params_override = extra_kwargs
-            resolved_spec = f"{result.provider}:{result.model_name}"
             await self._restore_effort_override(resolved_spec)
 
             self._sync_status_model()
@@ -24747,6 +24857,12 @@ async def run_textual_app(
     hook_trust: WorkspaceTrust | None = None,
     title: str | None = None,
     sub_title: str | None = None,
+    banner_brand: str = "dcode",
+    banner_show_version: bool | None = None,
+    banner_show_model: bool | None = None,
+    local_model_resolver: LocalModelResolver | None = None,
+    configured_models: Sequence[tuple[str, str]] | None = None,
+    model_config_path: Path | None = None,
 ) -> AppResult:
     """Run the Textual application.
 
@@ -24812,6 +24928,17 @@ async def run_textual_app(
             `"Deep Agents"` is used.
         sub_title: Override the Textual `App.sub_title` shown in the optional
             header bar.
+        banner_brand: Product name rendered by the welcome banner.
+        banner_show_version: Whether the welcome banner renders the package
+            version. `None` preserves the environment-controlled default.
+        banner_show_model: Whether the welcome banner renders the active model
+            row. `None` preserves the environment-controlled default.
+        local_model_resolver: Optional product callback used to resolve
+            `/model` selections for an in-process graph.
+        configured_models: Optional `(provider:model, provider)` rows for a
+            product-owned model pool shown by `/model`.
+        model_config_path: Optional config file used for per-model effort
+            preferences. `None` keeps the DeepAgents global config path.
 
     Returns:
         An `AppResult` with the return code and final thread ID.
@@ -24842,6 +24969,12 @@ async def run_textual_app(
         hook_trust=hook_trust,
         title=title,
         sub_title=sub_title,
+        banner_brand=banner_brand,
+        banner_show_version=banner_show_version,
+        banner_show_model=banner_show_model,
+        local_model_resolver=local_model_resolver,
+        configured_models=configured_models,
+        model_config_path=model_config_path,
     )
     try:
         await app.run_async()

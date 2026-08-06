@@ -200,6 +200,9 @@ class WelcomeBanner(Static):
         thread_id: str | None = None,
         mcp_tool_count: int = 0,
         *,
+        brand_name: str = "dcode",
+        show_version: bool | None = None,
+        show_model: bool | None = None,
         model_provider: str = "",
         model_name: str = "",
         cwd: str | None = None,
@@ -213,6 +216,13 @@ class WelcomeBanner(Static):
         Args:
             thread_id: Displayed only when debug mode is enabled.
             mcp_tool_count: Number of MCP tools loaded at startup.
+            brand_name: Product name rendered in the banner title.
+            show_version: Whether to render the package version. When `None`,
+                the `DEEPAGENTS_CODE_HIDE_SPLASH_VERSION` environment setting
+                controls the result.
+            show_model: Whether to render the active model row. When `None`,
+                the `DEEPAGENTS_CODE_SPLASH_SHOW_MODEL` environment setting
+                controls the result.
             model_provider: Active model provider (e.g. `anthropic`). Displayed
                 only when `SPLASH_SHOW_MODEL` is enabled.
             model_name: Active model name. Displayed only when `SPLASH_SHOW_MODEL` is
@@ -224,17 +234,24 @@ class WelcomeBanner(Static):
             mcp_awaiting_reconnect: Number of MCP servers awaiting reconnect.
             **kwargs: Additional arguments passed to parent.
         """
+        self._brand_name = brand_name
         self._model_provider = model_provider
         self._model_name = model_name
         self._cwd = cwd if cwd is not None else str(Path.cwd())
-        self._show_model = is_env_truthy(SPLASH_SHOW_MODEL)
+        self._show_model = (
+            is_env_truthy(SPLASH_SHOW_MODEL) if show_model is None else show_model
+        )
         # `_show_cwd` and `_hide_cwd` are deliberately orthogonal: `_show_cwd`
         # gates the working-directory row (opt-in), while `_hide_cwd` gates the
         # editable-install path below. They govern different surfaces, so both
         # can be set without contradiction.
         self._show_cwd = is_env_truthy(SPLASH_SHOW_CWD)
         self._hide_cwd = is_env_truthy(HIDE_CWD)
-        self._hide_version = is_env_truthy(HIDE_SPLASH_VERSION)
+        self._hide_version = (
+            is_env_truthy(HIDE_SPLASH_VERSION)
+            if show_version is None
+            else not show_version
+        )
         # Avoid collision with Widget._thread_id (Textual internal int)
         self._cli_thread_id = thread_id
         self._mcp_tool_count = mcp_tool_count
@@ -445,7 +462,7 @@ class WelcomeBanner(Static):
 
         parts: list[str | tuple[str, str | TStyle]] = [
             (f"{get_glyphs().cursor} ", title_style),
-            ("dcode", "bold"),
+            (self._brand_name, "bold"),
         ]
         if not self._hide_version:
             parts.append((f"  v{__version__}", "dim"))

@@ -139,7 +139,9 @@ celerybeat.pid
 # Environments
 .env
 .env.*
+!.env.example
 .envrc
+caro.local.yaml
 env.local
 *.env.local
 .venv
@@ -256,6 +258,9 @@ libs/cli/TEXTUAL_PROGRESS.md
 
 CLAUDE.md
 .worktrees/
+
+# Caro local state
+.caro/
 
 # Frontend build artifacts (source tree; package data under libs/cli/deepagents_cli/deploy/frontend_dist/ is tracked)
 libs/cli/frontend/node_modules/

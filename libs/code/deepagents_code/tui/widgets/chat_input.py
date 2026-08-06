@@ -899,6 +899,29 @@ class ChatTextArea(PasteBurstTextArea):
 
         self.insert(payload)
 
+    async def _dispatch_burst_submission(self) -> None:
+        """Submit text after a buffered Enter receives no paste continuation."""
+        self._submit_current_text()
+
+    def _defer_burst_enter_submission(self) -> bool:  # noqa: PLR6301  # policy hook override
+        """Use a short grace period so rapid chat input can still submit.
+
+        Returns:
+            `True` for the chat input, which has a submit action.
+        """
+        return True
+
+    def _submit_current_text(self) -> None:
+        """Post the current draft as a chat submission when it is non-empty."""
+        if (
+            self._chat_input_owner is not None
+            and self._chat_input_owner._handle_stale_slash_enter()
+        ):
+            return
+        value = self.text.strip()
+        if value:
+            self.post_message(self.Submitted(value))
+
     async def _on_key(self, event: events.Key) -> None:
         """Handle key events."""
         # Lock keys (Caps Lock, Num Lock, Scroll Lock) must never type. The
@@ -1020,14 +1043,7 @@ class ChatTextArea(PasteBurstTextArea):
             event.stop()
             if self._consume_enter_as_burst_newline(now):
                 return
-            if (
-                self._chat_input_owner is not None
-                and self._chat_input_owner._handle_stale_slash_enter()
-            ):
-                return
-            value = self.text.strip()
-            if value:
-                self.post_message(self.Submitted(value))
+            self._submit_current_text()
             return
 
         await super()._on_key(event)
