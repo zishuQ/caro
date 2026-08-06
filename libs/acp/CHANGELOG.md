@@ -2,6 +2,18 @@
 
 # Changelog
 
+## [0.0.10](https://github.com/zishuQ/caro/compare/deepagents-acp==0.0.9...deepagents-acp==0.0.10) (2026-08-06)
+
+
+### Features
+
+* **code:** add Claude Opus 5 support ([#5049](https://github.com/zishuQ/caro/issues/5049)) ([c0afec5](https://github.com/zishuQ/caro/commit/c0afec5ab7e9860d1572002c1f689f95dd15cf8e))
+
+
+### Bug Fixes
+
+* **acp:** defer interrupt state reads until stream closes ([#4542](https://github.com/zishuQ/caro/issues/4542)) ([35199ab](https://github.com/zishuQ/caro/commit/35199ab22b2111474d1f46b3ad7cc677d82ed46b))
+
 ## [0.0.9](https://github.com/langchain-ai/deepagents/compare/deepagents-acp==0.0.8...deepagents-acp==0.0.9) (2026-07-07)
 
 
