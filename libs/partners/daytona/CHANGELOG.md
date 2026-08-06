@@ -2,6 +2,18 @@
 
 # Changelog
 
+## [0.0.9](https://github.com/zishuQ/caro/compare/langchain-daytona==0.0.8...langchain-daytona==0.0.9) (2026-08-06)
+
+
+### Features
+
+* **code:** add Claude Opus 5 support ([#5049](https://github.com/zishuQ/caro/issues/5049)) ([c0afec5](https://github.com/zishuQ/caro/commit/c0afec5ab7e9860d1572002c1f689f95dd15cf8e))
+
+
+### Bug Fixes
+
+* **daytona:** require deepagents 0.7.x ([#5147](https://github.com/zishuQ/caro/issues/5147)) ([e326721](https://github.com/zishuQ/caro/commit/e326721d2de3bdcb01843f4bd1ef2165aefd9a7f))
+
 ## [0.0.8](https://github.com/langchain-ai/deepagents/compare/langchain-daytona==0.0.7...langchain-daytona==0.0.8) (2026-07-29)
 
 ### Bug Fixes
