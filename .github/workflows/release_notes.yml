@@ -116,7 +116,7 @@ jobs:
     steps:
       - name: Generate release bot token
         id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           client-id: ${{ vars.ORG_MEMBERSHIP_APP_CLIENT_ID }}
           private-key: ${{ secrets.ORG_MEMBERSHIP_APP_PRIVATE_KEY }}
@@ -161,7 +161,7 @@ jobs:
       # AbortSignal.timeout) doesn't depend on whatever the runner image
       # preinstalls; matches the version the helper tests run under in ci.yml.
       - name: Set up Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v6
         with:
           node-version: "24"
 
@@ -316,7 +316,7 @@ jobs:
     steps:
       - name: Generate release bot token
         id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           client-id: ${{ vars.ORG_MEMBERSHIP_APP_CLIENT_ID }}
           private-key: ${{ secrets.ORG_MEMBERSHIP_APP_PRIVATE_KEY }}
